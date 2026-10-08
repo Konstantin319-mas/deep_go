@@ -2,7 +2,6 @@ package main
 
 import (
 	"reflect"
-	"sync/atomic"
 	"testing"
 	"unsafe"
 
@@ -15,12 +14,12 @@ import (
 // nil в refs означает, что копия буфера закрыта (Close).
 type COWBuffer struct {
 	data []byte
-	refs *int32
+	refs *int
 }
 
 // NewCOWBuffer создает новый буфер с разделяемым счетчиком ссылок.
 func NewCOWBuffer(data []byte) COWBuffer {
-	var refs int32 = 1
+	refs := 1
 	return COWBuffer{data: data, refs: &refs}
 }
 
@@ -31,7 +30,7 @@ func (b *COWBuffer) Clone() COWBuffer {
 		// клонирование закрытого буфера - возвращаем независимый пустой буфер
 		return NewCOWBuffer(b.data)
 	}
-	atomic.AddInt32(b.refs, 1)
+	*b.refs++
 	return COWBuffer{data: b.data, refs: b.refs}
 }
 
@@ -43,7 +42,7 @@ func (b *COWBuffer) Close() {
 	if b.refs == nil {
 		return
 	}
-	atomic.AddInt32(b.refs, -1)
+	*b.refs--
 	b.data = nil
 	b.refs = nil
 }
@@ -56,13 +55,9 @@ func (b *COWBuffer) Update(index int, value byte) bool {
 	if b.refs == nil || index < 0 || index >= len(b.data) {
 		return false
 	}
-	if atomic.LoadInt32(b.refs) > 1 {
-		newData := make([]byte, len(b.data))
-		copy(newData, b.data)
-		atomic.AddInt32(b.refs, -1)
-		var refs int32 = 1
-		b.data = newData
-		b.refs = &refs
+	if *b.refs > 1 {
+		*b.refs-- // открепляемся от общего буфера
+		*b = NewCOWBuffer(append([]byte(nil), b.data...))
 	}
 	b.data[index] = value
 	return true
