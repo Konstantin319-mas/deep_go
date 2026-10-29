@@ -31,6 +31,19 @@ func NewContainer() *Container {
 }
 
 func (c *Container) RegisterType(name string, constructor interface{}) {
+	fn := reflect.ValueOf(constructor)
+	if fn.Kind() != reflect.Func || fn.Type().NumIn() != 0 {
+		panic(fmt.Sprintf("constructor for %q must be a func without arguments", name))
+	}
+
+	numOut := fn.Type().NumOut()
+	if numOut < 1 || numOut > 2 {
+		panic(fmt.Sprintf("constructor for %q must return (interface{}) or (interface{}, error)", name))
+	}
+	if numOut == 2 && !fn.Type().Out(1).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+		panic(fmt.Sprintf("second return value of constructor for %q must be error", name))
+	}
+
 	c.constructors[name] = constructor
 }
 
@@ -41,17 +54,7 @@ func (c *Container) Resolve(name string) (interface{}, error) {
 	}
 
 	fn := reflect.ValueOf(constructor)
-	if fn.Kind() != reflect.Func || fn.Type().NumIn() != 0 {
-		return nil, fmt.Errorf("constructor for %q must be a func without arguments", name)
-	}
-
 	numOut := fn.Type().NumOut()
-	if numOut < 1 || numOut > 2 {
-		return nil, fmt.Errorf("constructor for %q must return (interface{}) or (interface{}, error)", name)
-	}
-	if numOut == 2 && !fn.Type().Out(1).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
-		return nil, fmt.Errorf("second return value of constructor for %q must be error", name)
-	}
 
 	results := fn.Call(nil)
 	if err, ok := results[numOut-1].Interface().(error); numOut == 2 && ok && err != nil {
@@ -118,17 +121,22 @@ func TestDIContainer_InvalidConstructors(t *testing.T) {
 	container := NewContainer()
 
 	// not a function
-	container.RegisterType("NotAFunc", 42)
-	_, err := container.Resolve("NotAFunc")
-	assert.Error(t, err)
+	assert.Panics(t, func() {
+		container.RegisterType("NotAFunc", 42)
+	})
 
 	// function with arguments
-	container.RegisterType("WithArgs", func(x int) interface{} { return x })
-	_, err = container.Resolve("WithArgs")
-	assert.Error(t, err)
+	assert.Panics(t, func() {
+		container.RegisterType("WithArgs", func(x int) interface{} { return x })
+	})
 
 	// function without return values
-	container.RegisterType("NoReturn", func() {})
-	_, err = container.Resolve("NoReturn")
-	assert.Error(t, err)
+	assert.Panics(t, func() {
+		container.RegisterType("NoReturn", func() {})
+	})
+
+	// second return value is not an error
+	assert.Panics(t, func() {
+		container.RegisterType("BadSecondReturn", func() (interface{}, int) { return nil, 42 })
+	})
 }
